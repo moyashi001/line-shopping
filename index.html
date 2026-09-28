@@ -6,18 +6,11 @@
   <meta name="theme-color" content="#06C755">
   <title>買物＆ストック管理</title>
 
-  <!-- Tailwind CSS (CDN) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: { line: { DEFAULT: '#06C755', dark: '#05A847', light: '#E6F9EE' } },
-          fontFamily: { sans: ['"Hiragino Sans"', '"Noto Sans JP"', 'system-ui', 'sans-serif'] },
-        },
-      },
-    };
-  </script>
+  <!-- Tailwind CSS（事前生成。クラスを追加・変更したら setup_guide.md の手順で styles.css を再生成） -->
+  <link rel="stylesheet" href="styles.css">
+  <!-- GAS への接続を先に確立しておく -->
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
   <style>
     html, body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
     details > summary { list-style: none; }

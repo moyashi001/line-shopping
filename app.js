@@ -53,19 +53,22 @@ async function init() {
     return;
   }
 
+  // 前回のデータがあれば即表示し、GASの応答（数秒〜数十秒）を待たずに操作できるようにする
+  const cached = loadCache();
+  if (cached) {
+    applyData(cached, false);
+    showLoading(false);
+  }
+
   try {
     await liff.init({ liffId: APP_CONFIG.LIFF_ID });
     if (!liff.isLoggedIn()) {
       liff.login({ redirectUri: location.href });
       return;
     }
-    try {
-      state.profile = await liff.getProfile();
-      $('user-name').textContent = `${state.profile.displayName} さん`;
-    } catch (e) {
-      console.warn('プロフィール取得失敗', e);
-    }
-    await refresh(true);
+    markLiffReady();
+    loadProfile();
+    await refresh(!cached);
   } catch (e) {
     console.error(e);
     showFatal('初期化に失敗しました: ' + (e.message || e));
@@ -77,6 +80,38 @@ async function init() {
     if (document.visibilityState === 'hidden') flushPurchaseNotice();
     if (document.visibilityState === 'visible' && state.loaded && state.pending === 0) refresh(false);
   });
+}
+
+/** 表示名は ID トークンから取得（通信なし）。取れない場合のみ getProfile を裏で呼ぶ */
+function loadProfile() {
+  const show = (name) => {
+    state.profile = { displayName: name };
+    $('user-name').textContent = `${name} さん`;
+  };
+  try {
+    const t = liff.getDecodedIDToken();
+    if (t && t.name) return show(t.name);
+  } catch (e) { /* noop */ }
+  liff.getProfile().then((p) => show(p.displayName)).catch((e) => console.warn('プロフィール取得失敗', e));
+}
+
+// LIFF の初期化が終わるまで API 呼び出しを待たせる（キャッシュ表示中の操作対策）
+let markLiffReady;
+const liffReady = new Promise((resolve) => { markLiffReady = resolve; });
+
+const CACHE_KEY = 'cache_v1';
+
+function loadCache() {
+  try {
+    const data = JSON.parse(storageGet(CACHE_KEY) || 'null');
+    return data && Array.isArray(data.shopping) && Array.isArray(data.stock) ? data : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveCache(data) {
+  storageSet(CACHE_KEY, JSON.stringify({ shopping: data.shopping || [], stock: data.stock || [] }));
 }
 
 function bindEvents() {
@@ -121,6 +156,7 @@ function api(action, payload = {}) {
 
   const run = async () => {
     try {
+      await liffReady;
       const res = await fetch(APP_CONFIG.GAS_URL, {
         method: 'POST',
         // text/plain にすると CORS のプリフライトが発生せず GAS で受け取れる
@@ -180,10 +216,11 @@ async function mutate(action, payload, optimistic) {
   }
 }
 
-function applyData(data) {
+function applyData(data, persist = true) {
   state.shopping = data.shopping || [];
   state.stock = data.stock || [];
   state.loaded = true;
+  if (persist) saveCache(data);
   render();
 }
 
