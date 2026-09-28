@@ -220,6 +220,9 @@ function toggleItem(id, btn) {
     btn.classList.add('border-line', 'bg-line', 'text-white', 'pop');
   }
 
+  const itemName = item.name;
+  const restocked = toDone && state.stock.some((s) => s.name === itemName && s.status !== '十分');
+
   setTimeout(() => {
     mutate('setPurchased', { id, purchased: toDone }, () => {
       item.status = toDone ? ITEM_DONE : ITEM_TODO;
@@ -228,12 +231,41 @@ function toggleItem(id, btn) {
       item.purchasedAtTs = toDone ? Date.now() : 0;
       if (toDone) {
         state.stock
-          .filter((s) => s.name === item.name && s.status !== '十分')
+          .filter((s) => s.name === itemName && s.status !== '十分')
           .forEach((s) => { s.status = '十分'; s.updatedAt = nowStr(); });
       }
+    }).then((ok) => {
+      if (ok && toDone) notifyPurchaseToChat(itemName, restocked);
     });
-    if (toDone) toast(`『${item.name}』を購入済みにしました`);
+    if (toDone) toast(`『${itemName}』を購入済みにしました`);
   }, toDone ? 220 : 0);
+}
+
+/**
+ * グループ（複数人トーク）から開いたときだけ、本人の発言として購入通知を投稿する。
+ * liff.sendMessages() はLINEの通数にカウントされないため無料。
+ * ※ 文面の先頭「🛒『…』を購入しました」は Code.gs 側で買物アイテムとして登録しないよう除外している
+ */
+async function notifyPurchaseToChat(itemName, restocked) {
+  if (!canNotifyChat()) return;
+  const text = `🛒『${itemName}』を購入しました！` +
+    (restocked ? '\n📦 ストックを「余裕あり」に更新しました' : '');
+  try {
+    await liff.sendMessages([{ type: 'text', text }]);
+  } catch (e) {
+    console.warn('sendMessages 失敗', e);
+    toast('⚠️ グループへの通知を送れませんでした');
+  }
+}
+
+function canNotifyChat() {
+  try {
+    if (!liff.isInClient() || !liff.isApiAvailable('sendMessages')) return false;
+    const ctx = liff.getContext();
+    return !!ctx && (ctx.type === 'group' || ctx.type === 'room');
+  } catch (e) {
+    return false;
+  }
 }
 
 function deleteItem(id) {
