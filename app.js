@@ -73,6 +73,8 @@ async function init() {
 
   // 他の人の更新を拾うため、画面に戻ってきたら再取得
   document.addEventListener('visibilitychange', () => {
+    // アプリを閉じる・切り替えるときは、待機中の購入通知をすぐ送る
+    if (document.visibilityState === 'hidden') flushPurchaseNotice();
     if (document.visibilityState === 'visible' && state.loaded && state.pending === 0) refresh(false);
   });
 }
@@ -104,6 +106,7 @@ function onClick(e) {
     case 'stock-status':    setStockStatus(id, el.dataset.status); break;
     case 'to-shopping':     stockToShopping(id); break;
     case 'delete-stock':    deleteStock(id); break;
+    case 'flush-notice':    flushPurchaseNotice(); break;
   }
 }
 
@@ -235,27 +238,67 @@ function toggleItem(id, btn) {
           .forEach((s) => { s.status = '十分'; s.updatedAt = nowStr(); });
       }
     }).then((ok) => {
-      if (ok && toDone) notifyPurchaseToChat(itemName, restocked);
+      if (!ok) return;
+      if (toDone) queuePurchaseNotice(id, itemName, restocked);
+      else unqueuePurchaseNotice(id);
     });
     if (toDone) toast(`『${itemName}』を購入済みにしました`);
   }, toDone ? 220 : 0);
 }
 
 /**
+ * 購入通知のまとめ送信
  * グループ（複数人トーク）から開いたときだけ、本人の発言として購入通知を投稿する。
  * liff.sendMessages() はLINEの通数にカウントされないため無料。
- * ※ 文面の先頭「🛒『…』を購入しました」は Code.gs 側で買物アイテムとして登録しないよう除外している
+ * 続けてチェックした分は、最後のチェックから NOTIFY_DELAY_MS 待って1通にまとめる。
+ * ※ 文面「🛒『…』を購入しました」は Code.gs 側で買物アイテムとして登録しないよう除外している
  */
-async function notifyPurchaseToChat(itemName, restocked) {
+const NOTIFY_DELAY_MS = 5000;
+const noticeQueue = [];   // { id, name, restocked }
+let noticeTimer = null;
+
+function queuePurchaseNotice(id, name, restocked) {
   if (!canNotifyChat()) return;
-  const text = `🛒『${itemName}』を購入しました！` +
-    (restocked ? '\n📦 ストックを「余裕あり」に更新しました' : '');
+  if (!noticeQueue.some((n) => n.id === id)) noticeQueue.push({ id, name, restocked });
+  scheduleNotice();
+}
+
+function unqueuePurchaseNotice(id) {
+  const i = noticeQueue.findIndex((n) => n.id === id);
+  if (i < 0) return;
+  noticeQueue.splice(i, 1);
+  scheduleNotice();
+}
+
+function scheduleNotice() {
+  clearTimeout(noticeTimer);
+  updateNoticeBar();
+  if (noticeQueue.length) noticeTimer = setTimeout(flushPurchaseNotice, NOTIFY_DELAY_MS);
+}
+
+async function flushPurchaseNotice() {
+  clearTimeout(noticeTimer);
+  if (!noticeQueue.length) return;
+  const items = noticeQueue.splice(0);
+  updateNoticeBar();
+
+  const text = '🛒' + items.map((n) => `『${n.name}』`).join('') + 'を購入しました！' +
+    (items.some((n) => n.restocked) ? '\n📦 ストックを「余裕あり」に更新しました' : '');
   try {
-    await liff.sendMessages([{ type: 'text', text }]);
+    await liff.sendMessages([{ type: 'text', text: text.slice(0, 4900) }]);
+    toast(items.length > 1 ? `${items.length}件の購入をグループに通知しました` : 'グループに通知しました');
   } catch (e) {
     console.warn('sendMessages 失敗', e);
     toast('⚠️ グループへの通知を送れませんでした');
   }
+}
+
+function updateNoticeBar() {
+  const bar = $('notice-bar');
+  if (!bar) return;
+  bar.classList.toggle('hidden', noticeQueue.length === 0);
+  bar.classList.toggle('flex', noticeQueue.length > 0);
+  $('notice-count').textContent = noticeQueue.length;
 }
 
 function canNotifyChat() {

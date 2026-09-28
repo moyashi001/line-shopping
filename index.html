@@ -113,6 +113,14 @@
       </section>
     </main>
 
+    <!-- 購入通知の待機バー -->
+    <div id="notice-bar"
+      class="fab-pos fixed left-4 right-24 z-30 hidden items-center justify-between gap-2 rounded-2xl bg-slate-800/95 py-2 pl-4 pr-2 text-sm text-white shadow-lg">
+      <span>🛒 <span id="notice-count">0</span>件をまとめて通知します</span>
+      <button type="button" data-action="flush-notice"
+        class="shrink-0 rounded-xl bg-line px-3 py-2 text-xs font-bold active:bg-line-dark">今すぐ送信</button>
+    </div>
+
     <!-- 追加ボタン -->
     <button type="button" data-action="fab" aria-label="追加"
       class="fab-pos fixed right-5 z-30 flex h-16 w-16 items-center justify-center rounded-full bg-line text-4xl font-light text-white shadow-xl shadow-line/40 transition active:scale-95 active:bg-line-dark">＋</button>
