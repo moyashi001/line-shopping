@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#06C755">
+  <title>買物＆ストック管理</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: { line: { DEFAULT: '#06C755', dark: '#05A847', light: '#E6F9EE' } },
+          fontFamily: { sans: ['"Hiragino Sans"', '"Noto Sans JP"', 'system-ui', 'sans-serif'] },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    details[open] .chevron { transform: rotate(180deg); }
+    .safe-bottom { padding-bottom: calc(1.25rem + env(safe-area-inset-bottom)); }
+    .fab-pos { bottom: calc(1.5rem + env(safe-area-inset-bottom)); }
+    @keyframes sheet-in { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    .sheet { animation: sheet-in .22s ease-out; }
+    @keyframes pop { 0% { transform: scale(1); } 50% { transform: scale(1.25); } 100% { transform: scale(1); } }
+    .pop { animation: pop .22s ease-out; }
+  </style>
+
+  <!-- LIFF SDK -->
+  <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+</head>
+<body class="bg-slate-100 font-sans text-slate-800 antialiased">
+  <div class="mx-auto min-h-screen max-w-lg pb-32">
+
+    <!-- ===== ヘッダー ===== -->
+    <header class="sticky top-0 z-20 bg-line text-white shadow-md">
+      <div class="flex items-center justify-between px-4 pb-2 pt-3">
+        <div class="min-w-0">
+          <h1 class="text-lg font-bold leading-tight">🛒 買物＆ストック</h1>
+          <p id="user-name" class="truncate text-xs text-white/80">&nbsp;</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <span id="sync-indicator" class="hidden h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" title="同期中"></span>
+          <button type="button" data-action="refresh" aria-label="再読み込み"
+            class="flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-xl active:bg-white/30">↻</button>
+        </div>
+      </div>
+      <nav class="grid grid-cols-2 text-sm font-bold">
+        <button type="button" data-action="tab" data-tab="shopping"
+          class="tab-btn flex items-center justify-center gap-1.5 border-b-4 py-2.5">
+          買物リスト
+          <span id="badge-shopping" class="hidden min-w-[1.25rem] rounded-full bg-white px-1.5 text-xs leading-5 text-line"></span>
+        </button>
+        <button type="button" data-action="tab" data-tab="stock"
+          class="tab-btn flex items-center justify-center gap-1.5 border-b-4 py-2.5">
+          ストック管理
+          <span id="badge-stock" class="hidden min-w-[1.25rem] rounded-full bg-rose-500 px-1.5 text-xs leading-5 text-white"></span>
+        </button>
+      </nav>
+    </header>
+
+    <main>
+      <!-- エラー表示 -->
+      <div id="fatal" class="m-4 hidden rounded-2xl bg-rose-50 p-4 text-sm text-rose-700"></div>
+
+      <!-- 読み込み中 -->
+      <div id="loading" class="flex flex-col items-center justify-center gap-3 py-20 text-sm text-slate-400">
+        <span class="h-8 w-8 animate-spin rounded-full border-4 border-slate-200 border-t-line"></span>
+        読み込み中…
+      </div>
+
+      <!-- ===== 買物リスト ===== -->
+      <section id="view-shopping" class="hidden px-4 pt-4">
+        <ul id="shopping-list" class="space-y-2"></ul>
+
+        <div id="shopping-empty" class="hidden rounded-2xl bg-white px-6 py-12 text-center shadow-sm">
+          <p class="text-4xl">🎉</p>
+          <p class="mt-3 font-bold">買うものはありません</p>
+          <p class="mt-1 text-xs leading-relaxed text-slate-400">右下の＋ボタン、またはLINEトークに<br>テキストや写真を送ると追加できます</p>
+        </div>
+
+        <details id="purchased-section" class="mt-6 hidden">
+          <summary class="flex cursor-pointer items-center justify-between rounded-xl px-1 py-2 text-sm font-bold text-slate-500">
+            <span>✓ 購入済み（<span id="purchased-count">0</span>）</span>
+            <span class="chevron transition-transform">▾</span>
+          </summary>
+          <ul id="purchased-list" class="mt-2 space-y-2"></ul>
+          <button type="button" data-action="clear-purchased"
+            class="mt-3 w-full rounded-xl border border-slate-300 bg-white py-2.5 text-sm font-bold text-slate-500 active:bg-slate-50">
+            購入済みをすべて削除
+          </button>
+        </details>
+      </section>
+
+      <!-- ===== ストック管理 ===== -->
+      <section id="view-stock" class="hidden px-4 pt-4">
+        <div class="mb-4 flex gap-2">
+          <button type="button" data-action="stock-filter" data-filter="all"
+            class="filter-btn rounded-full border px-4 py-1.5 text-sm font-bold">すべて</button>
+          <button type="button" data-action="stock-filter" data-filter="need"
+            class="filter-btn rounded-full border px-4 py-1.5 text-sm font-bold">補充が必要</button>
+        </div>
+        <div id="stock-groups" class="space-y-5"></div>
+        <div id="stock-empty" class="hidden rounded-2xl bg-white px-6 py-12 text-center shadow-sm">
+          <p class="text-4xl">📦</p>
+          <p id="stock-empty-text" class="mt-3 font-bold">ストックが登録されていません</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- 追加ボタン -->
+    <button type="button" data-action="fab" aria-label="追加"
+      class="fab-pos fixed right-5 z-30 flex h-16 w-16 items-center justify-center rounded-full bg-line text-4xl font-light text-white shadow-xl shadow-line/40 transition active:scale-95 active:bg-line-dark">＋</button>
+  </div>
+
+  <!-- ===== モーダル: 買物アイテム追加 ===== -->
+  <div id="modal-item" class="modal fixed inset-0 z-40 hidden">
+    <div class="absolute inset-0 bg-black/40" data-action="close-modal"></div>
+    <form id="form-item" class="sheet safe-bottom absolute inset-x-0 bottom-0 mx-auto max-h-[90vh] max-w-lg overflow-y-auto rounded-t-3xl bg-white px-5 pt-5">
+      <div class="mx-auto mb-4 h-1.5 w-10 rounded-full bg-slate-200"></div>
+      <h2 class="mb-3 text-lg font-bold">買物リストに追加</h2>
+
+      <textarea id="item-text" rows="2" maxlength="1000"
+        class="w-full resize-none rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="例: 卵 1パック&#10;（改行で複数まとめて追加）"></textarea>
+
+      <div id="item-preview-wrap" class="relative mt-3 hidden">
+        <img id="item-preview" alt="プレビュー" class="max-h-56 w-full rounded-xl bg-slate-100 object-contain">
+        <button type="button" data-action="remove-image" aria-label="写真を外す"
+          class="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-white">✕</button>
+      </div>
+      <p id="item-image-status" class="mt-2 hidden text-xs text-slate-400">画像を処理中…</p>
+
+      <div class="mt-3 grid grid-cols-2 gap-2">
+        <label class="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-300 py-2.5 text-sm font-bold text-slate-600 active:bg-slate-50">
+          <input id="input-camera" type="file" accept="image/*" capture="environment" class="hidden">
+          📷 撮影する
+        </label>
+        <label class="flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-slate-300 py-2.5 text-sm font-bold text-slate-600 active:bg-slate-50">
+          <input id="input-photo" type="file" accept="image/*" class="hidden">
+          🖼 写真を選ぶ
+        </label>
+      </div>
+
+      <div class="mt-5 grid grid-cols-2 gap-2">
+        <button type="button" data-action="close-modal"
+          class="rounded-xl bg-slate-100 py-3 font-bold text-slate-600 active:bg-slate-200">キャンセル</button>
+        <button type="submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">追加する</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ===== モーダル: ストック追加 ===== -->
+  <div id="modal-stock" class="modal fixed inset-0 z-40 hidden">
+    <div class="absolute inset-0 bg-black/40" data-action="close-modal"></div>
+    <form id="form-stock" class="sheet safe-bottom absolute inset-x-0 bottom-0 mx-auto max-w-lg rounded-t-3xl bg-white px-5 pt-5">
+      <div class="mx-auto mb-4 h-1.5 w-10 rounded-full bg-slate-200"></div>
+      <h2 class="mb-3 text-lg font-bold">ストックに追加</h2>
+
+      <label class="block text-xs font-bold text-slate-500">アイテム名</label>
+      <input id="stock-name" type="text" maxlength="100" required
+        class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="例: 食器用洗剤">
+
+      <label class="mt-3 block text-xs font-bold text-slate-500">カテゴリ</label>
+      <input id="stock-category" type="text" maxlength="30" list="category-list"
+        class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="例: 日用品">
+      <datalist id="category-list"></datalist>
+
+      <label class="mt-3 block text-xs font-bold text-slate-500">現在のステータス</label>
+      <select id="stock-status"
+        class="mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-base focus:border-line focus:outline-none">
+        <option value="十分">🟢 余裕あり</option>
+        <option value="少なめ">🟡 残りわずか</option>
+        <option value="なし">🔴 切れた</option>
+      </select>
+
+      <div class="mt-5 grid grid-cols-2 gap-2">
+        <button type="button" data-action="close-modal"
+          class="rounded-xl bg-slate-100 py-3 font-bold text-slate-600 active:bg-slate-200">キャンセル</button>
+        <button type="submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">追加する</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ===== モーダル: 画像ビューア ===== -->
+  <div id="modal-image" class="modal fixed inset-0 z-50 hidden items-center justify-center bg-black/90 p-4" data-display="flex" data-action="close-modal">
+    <img id="viewer-img" alt="" class="max-h-[90vh] max-w-full rounded-lg object-contain">
+    <span class="absolute right-4 top-4 text-3xl text-white/80">✕</span>
+  </div>
+
+  <!-- トースト -->
+  <div id="toast"
+    class="pointer-events-none fixed inset-x-4 z-[60] mx-auto max-w-sm translate-y-4 rounded-2xl bg-slate-800/90 px-5 py-2.5 text-center text-sm text-white opacity-0 shadow-lg transition-all duration-200"
+    style="bottom: calc(6.5rem + env(safe-area-inset-bottom));"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
