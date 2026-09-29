@@ -29,6 +29,11 @@ const state = {
   stockFilter: 'all',
   shopping: [],
   stock: [],
+  suggestions: [],     // よく買う物（入力候補）
+  stockSortMode: false,
+  editingItemId: null,
+  editingStockId: null,
+  renamingCategory: null,
   profile: null,
   loaded: false,
   pending: 0,
@@ -111,13 +116,20 @@ function loadCache() {
 }
 
 function saveCache(data) {
-  storageSet(CACHE_KEY, JSON.stringify({ shopping: data.shopping || [], stock: data.stock || [] }));
+  storageSet(CACHE_KEY, JSON.stringify({
+    shopping: data.shopping || [],
+    stock: data.stock || [],
+    suggestions: data.suggestions || [],
+  }));
 }
 
 function bindEvents() {
   document.addEventListener('click', onClick);
   $('form-item').addEventListener('submit', submitItem);
   $('form-stock').addEventListener('submit', submitStock);
+  $('form-edit-item').addEventListener('submit', submitEditItem);
+  $('form-category').addEventListener('submit', submitCategory);
+  $('item-text').addEventListener('input', renderSuggestions);
   $('input-camera').addEventListener('change', onImageSelected);
   $('input-photo').addEventListener('change', onImageSelected);
 }
@@ -142,6 +154,12 @@ function onClick(e) {
     case 'to-shopping':     stockToShopping(id); break;
     case 'delete-stock':    deleteStock(id); break;
     case 'flush-notice':    flushPurchaseNotice(); break;
+    case 'edit-item':       openEditItemModal(id); break;
+    case 'suggest':         addSuggestion(el.dataset.name); break;
+    case 'edit-stock':      openStockModal(id); break;
+    case 'toggle-sort':     toggleSortMode(); break;
+    case 'move-stock':      moveStock(id, Number(el.dataset.dir)); break;
+    case 'rename-category': openCategoryModal(el.dataset.category); break;
   }
 }
 
@@ -171,6 +189,7 @@ function api(action, payload = {}) {
         err.code = json.code;
         throw err;
       }
+      if (json.message) toast(json.message);
       return json.data;
     } finally {
       state.pending--;
@@ -219,6 +238,7 @@ async function mutate(action, payload, optimistic) {
 function applyData(data, persist = true) {
   state.shopping = data.shopping || [];
   state.stock = data.stock || [];
+  state.suggestions = data.suggestions || [];
   state.loaded = true;
   if (persist) saveCache(data);
   render();
@@ -261,7 +281,7 @@ function toggleItem(id, btn) {
   }
 
   const itemName = item.name;
-  const restocked = toDone && state.stock.some((s) => s.name === itemName && s.status !== '十分');
+  const restocked = toDone && state.stock.some((s) => sameName(s.name, itemName) && s.status !== '十分');
 
   setTimeout(() => {
     mutate('setPurchased', { id, purchased: toDone }, () => {
@@ -271,7 +291,7 @@ function toggleItem(id, btn) {
       item.purchasedAtTs = toDone ? Date.now() : 0;
       if (toDone) {
         state.stock
-          .filter((s) => s.name === itemName && s.status !== '十分')
+          .filter((s) => sameName(s.name, itemName) && s.status !== '十分')
           .forEach((s) => { s.status = '十分'; s.updatedAt = nowStr(); });
       }
     }).then((ok) => {
@@ -368,8 +388,35 @@ function clearPurchased() {
 function openItemModal() {
   $('form-item').reset();
   clearPendingImage();
+  renderSuggestions();
   openModal('modal-item');
-  setTimeout(() => $('item-text').focus(), 250);
+}
+
+/** よく買う物の候補（入力中の最終行で絞り込み、リストにある物は除外） */
+function renderSuggestions() {
+  const lines = $('item-text').value.split('\n');
+  const q = normalizeName(lines[lines.length - 1]);
+  const list = state.suggestions
+    .filter((n) => !isInShoppingList(n) && (!q || normalizeName(n).includes(q)))
+    .slice(0, 20);
+  $('suggestions-wrap').classList.toggle('hidden', list.length === 0);
+  $('suggestions').innerHTML = list.map((n) => `
+    <button type="button" data-action="suggest" data-name="${esc(n)}"
+      class="rounded-full border border-line/40 bg-line-light px-3 py-1.5 text-sm font-bold text-line active:scale-95">＋ ${esc(n)}</button>`).join('');
+}
+
+function addSuggestion(name) {
+  if (!name) return;
+  if (isInShoppingList(name)) {
+    toast(`『${name}』はすでに買物リストにあります`);
+    return;
+  }
+  mutate('addItem', { text: name }, () => {
+    state.shopping.push(tempItem(name, ''));
+  }).then((ok) => {
+    if (ok) toast(`『${name}』を追加しました`);
+  });
+  renderSuggestions();
 }
 
 async function onImageSelected(e) {
@@ -403,23 +450,80 @@ function submitItem(e) {
     return;
   }
 
-  const names = img
-    ? [text.replace(/\s*\n\s*/g, ' ').trim() || PHOTO_ITEM_NAME]
-    : text.split('\n').map((s) => s.trim()).filter(Boolean);
+  const memo = $('item-memo').value.trim();
+  let names;
+  let skipped = [];
+  if (img) {
+    names = [text.replace(/\s*\n\s*/g, ' ').trim() || PHOTO_ITEM_NAME];
+  } else {
+    // 重複（リストにある物・入力内の重複）を除外
+    names = [];
+    text.split('\n').map((s) => s.trim()).filter(Boolean).forEach((n) => {
+      if (isInShoppingList(n) || names.some((x) => sameName(x, n))) skipped.push(n);
+      else names.push(n);
+    });
+  }
+  const skippedMsg = skipped.length ? skipped.map((n) => `『${n}』`).join('') + 'はすでに買物リストにあります' : '';
+  if (!names.length) {
+    toast(skippedMsg);
+    return;
+  }
 
   closeModal($('modal-item'));
-  mutate('addItem', { text, imageBase64: img ? img.base64 : '', imageMime: img ? img.mime : '' }, () => {
-    names.forEach((name) => state.shopping.push(tempItem(name, img ? img.dataUrl : '')));
+  mutate('addItem', {
+    text: names.join('\n'),
+    memo,
+    imageBase64: img ? img.base64 : '',
+    imageMime: img ? img.mime : '',
+  }, () => {
+    names.forEach((name) => state.shopping.push(tempItem(name, img ? img.dataUrl : '', memo)));
   }).then((ok) => {
-    if (ok) toast(names.length > 1 ? `${names.length}件を追加しました` : `『${names[0]}』を追加しました`);
+    if (!ok) return;
+    const msg = names.length > 1 ? `${names.length}件を追加しました` : `『${names[0]}』を追加しました`;
+    toast(skippedMsg ? `${msg}（${skippedMsg}）` : msg);
   });
   clearPendingImage();
 }
 
-function tempItem(name, imageUrl) {
+function openEditItemModal(id) {
+  const item = state.shopping.find((i) => i.id === id);
+  if (!item || item.pending) return;
+  state.editingItemId = id;
+  $('edit-item-name').value = item.name === PHOTO_ITEM_NAME ? '' : item.name;
+  $('edit-item-memo').value = item.memo || '';
+  $('edit-item-image-wrap').classList.toggle('hidden', !item.imageUrl);
+  if (item.imageUrl) $('edit-item-image').src = item.imageUrl;
+  openModal('modal-edit-item');
+  if (item.name === PHOTO_ITEM_NAME) setTimeout(() => $('edit-item-name').focus(), 250);
+}
+
+function submitEditItem(e) {
+  e.preventDefault();
+  const item = state.shopping.find((i) => i.id === state.editingItemId);
+  if (!item) return closeModal($('modal-edit-item'));
+  const name = $('edit-item-name').value.trim();
+  const memo = $('edit-item-memo').value.trim();
+  if (!name) {
+    toast('アイテム名を入力してください');
+    return;
+  }
+  if (!sameName(name, item.name) && item.status !== ITEM_DONE && isInShoppingList(name)) {
+    toast(`『${name}』はすでに買物リストにあります`);
+    return;
+  }
+  closeModal($('modal-edit-item'));
+  if (name === item.name && memo === (item.memo || '')) return;
+  mutate('updateItem', { id: item.id, name, memo }, () => {
+    item.name = name;
+    item.memo = memo;
+  });
+}
+
+function tempItem(name, imageUrl, memo = '') {
   return {
     id: 'tmp_' + Math.random().toString(36).slice(2),
     name,
+    memo,
     imageUrl,
     createdBy: myName(),
     status: ITEM_TODO,
@@ -497,17 +601,66 @@ function deleteStock(id) {
   const s = state.stock.find((x) => x.id === id);
   if (!s || s.pending) return;
   if (!confirm(`ストック『${s.name}』を削除しますか？`)) return;
+  closeModal($('modal-stock'));
   mutate('deleteStock', { id }, () => {
     state.stock = state.stock.filter((x) => x.id !== id);
   });
 }
 
-function openStockModal() {
+function toggleSortMode() {
+  state.stockSortMode = !state.stockSortMode;
+  renderStock();
+}
+
+/** 同じカテゴリ内で上（-1）/下（1）の項目と入れ替え */
+function moveStock(id, dir) {
+  const i = state.stock.findIndex((x) => x.id === id);
+  if (i < 0 || state.stock[i].pending) return;
+  const cat = state.stock[i].category || 'その他';
+  let j = i + dir;
+  while (j >= 0 && j < state.stock.length && (state.stock[j].category || 'その他') !== cat) j += dir;
+  if (j < 0 || j >= state.stock.length) return;
+  mutate('moveStock', { id, dir }, () => {
+    [state.stock[i], state.stock[j]] = [state.stock[j], state.stock[i]];
+  });
+}
+
+function openCategoryModal(category) {
+  state.renamingCategory = category;
+  $('category-name').value = category;
+  openModal('modal-category');
+}
+
+function submitCategory(e) {
+  e.preventDefault();
+  const from = state.renamingCategory;
+  const to = $('category-name').value.trim();
+  closeModal($('modal-category'));
+  if (!to || to === from) return;
+  mutate('renameCategory', { from, to }, () => {
+    state.stock.forEach((s) => { if ((s.category || 'その他') === from) s.category = to; });
+  });
+}
+
+/** id を渡すと編集、省略すると新規追加 */
+function openStockModal(id) {
+  const editing = id ? state.stock.find((x) => x.id === id) : null;
+  if (id && (!editing || editing.pending)) return;
+  state.editingStockId = editing ? editing.id : null;
+
   $('form-stock').reset();
   const cats = [...new Set(state.stock.map((s) => s.category).filter(Boolean))];
   $('category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}"></option>`).join('');
+  $('stock-modal-title').textContent = editing ? 'ストックを編集' : 'ストックに追加';
+  $('stock-submit').textContent = editing ? '保存する' : '追加する';
+  $('stock-delete').classList.toggle('hidden', !editing);
+  $('stock-delete').dataset.id = editing ? editing.id : '';
+  if (editing) {
+    $('stock-name').value = editing.name;
+    $('stock-category').value = editing.category;
+    $('stock-status').value = editing.status;
+  }
   openModal('modal-stock');
-  setTimeout(() => $('stock-name').focus(), 250);
 }
 
 function submitStock(e) {
@@ -516,11 +669,21 @@ function submitStock(e) {
   const category = $('stock-category').value.trim() || 'その他';
   const status = $('stock-status').value;
   if (!name) return;
-  if (state.stock.some((s) => s.name === name)) {
+  const editId = state.editingStockId;
+  if (state.stock.some((s) => s.id !== editId && sameName(s.name, name))) {
     toast(`『${name}』はすでに登録されています`);
     return;
   }
   closeModal($('modal-stock'));
+
+  if (editId) {
+    const s = state.stock.find((x) => x.id === editId);
+    if (!s) return;
+    mutate('updateStock', { id: editId, name, category, status }, () => {
+      Object.assign(s, { name, category, status, updatedAt: nowStr() });
+    });
+    return;
+  }
   mutate('addStock', { name, category, status }, () => {
     state.stock.push({
       id: 'tmp_' + Math.random().toString(36).slice(2),
@@ -540,7 +703,7 @@ function setStockFilter(filter) {
 }
 
 function isInShoppingList(name) {
-  return state.shopping.some((i) => i.status !== ITEM_DONE && i.name === name);
+  return state.shopping.some((i) => i.status !== ITEM_DONE && sameName(i.name, name));
 }
 
 // ============================================================
@@ -596,10 +759,12 @@ function itemHtml(item) {
         <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
       </button>
       ${thumb}
-      <div class="min-w-0 flex-1">
-        <p class="break-words font-bold leading-snug ${done ? 'text-slate-400 line-through' : 'text-slate-800'}">${esc(item.name)}</p>
+      <button type="button" data-action="edit-item" data-id="${id}" ${disabled} class="min-w-0 flex-1 text-left">
+        <p class="break-words font-bold leading-snug ${done ? 'text-slate-400 line-through' : 'text-slate-800'}">${esc(item.name)}${
+          item.name === PHOTO_ITEM_NAME && !done ? ' <span class="text-xs font-normal text-line">✏️ 名前を付ける</span>' : ''}</p>
+        ${item.memo ? `<p class="mt-0.5 break-words text-sm text-slate-500">📝 ${esc(item.memo)}</p>` : ''}
         <p class="mt-0.5 truncate text-xs text-slate-400">${meta}</p>
-      </div>
+      </button>
       <button type="button" data-action="delete-item" data-id="${id}" ${disabled} aria-label="削除"
         class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-slate-300 active:bg-slate-100 active:text-rose-500">
         <svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
@@ -609,14 +774,20 @@ function itemHtml(item) {
 
 function renderStock() {
   const needs = (s) => s.status !== '十分';
-  const list = state.stockFilter === 'need' ? state.stock.filter(needs) : state.stock;
+  const sortMode = state.stockSortMode;
+  const list = !sortMode && state.stockFilter === 'need' ? state.stock.filter(needs) : state.stock;
 
-  // フィルタボタン
+  // フィルタ・並べ替えボタン
   document.querySelectorAll('.filter-btn').forEach((b) => {
-    const on = b.dataset.filter === state.stockFilter;
+    const on = !sortMode && b.dataset.filter === state.stockFilter;
     b.className = 'filter-btn rounded-full border px-4 py-1.5 text-sm font-bold ' +
-      (on ? 'border-line bg-line text-white' : 'border-slate-300 bg-white text-slate-500');
+      (on ? 'border-line bg-line text-white' : 'border-slate-300 bg-white text-slate-500') +
+      (sortMode ? ' opacity-40 pointer-events-none' : '');
   });
+  $('btn-sort').className = 'ml-auto rounded-full border px-4 py-1.5 text-sm font-bold ' +
+    (sortMode ? 'border-slate-800 bg-slate-800 text-white' : 'border-slate-300 bg-white text-slate-500');
+  $('btn-sort').textContent = sortMode ? '✓ 完了' : '↕ 並べ替え';
+  $('sort-hint').classList.toggle('hidden', !sortMode);
 
   // カテゴリごとにグループ化（シートの並び順を維持）
   const groups = new Map();
@@ -628,8 +799,12 @@ function renderStock() {
 
   $('stock-groups').innerHTML = [...groups.entries()].map(([cat, items]) => `
     <div>
-      <h3 class="mb-2 px-1 text-xs font-bold text-slate-500">${esc(cat)}</h3>
-      <ul class="space-y-2">${items.map(stockHtml).join('')}</ul>
+      <div class="mb-2 flex items-center gap-2 px-1">
+        <h3 class="text-xs font-bold text-slate-500">${esc(cat)}</h3>
+        ${sortMode ? `<button type="button" data-action="rename-category" data-category="${esc(cat)}"
+          class="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-500 active:bg-slate-100">✏️ 名前変更</button>` : ''}
+      </div>
+      <ul class="space-y-2">${items.map(sortMode ? stockSortHtml : stockHtml).join('')}</ul>
     </div>`).join('');
 
   const empty = list.length === 0 && state.loaded;
@@ -668,15 +843,28 @@ function stockHtml(s) {
   return `
     <li class="rounded-2xl bg-white p-3 shadow-sm ${border} ${s.pending ? 'animate-pulse' : ''}">
       <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0">
+        <button type="button" data-action="edit-stock" data-id="${id}" ${disabled} class="min-w-0 text-left">
           <p class="break-words font-bold leading-snug">${esc(s.name)}</p>
           <p class="mt-0.5 text-xs text-slate-400">更新: ${esc(shortDate(s.updatedAt))}</p>
-        </div>
-        <button type="button" data-action="delete-stock" data-id="${id}" ${disabled} aria-label="削除"
-          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-300 active:bg-slate-100 active:text-rose-500">✕</button>
+        </button>
+        <button type="button" data-action="edit-stock" data-id="${id}" ${disabled} aria-label="編集"
+          class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-300 active:bg-slate-100 active:text-slate-600">✏️</button>
       </div>
       <div class="mt-2 grid grid-cols-3 gap-1.5">${statusButtons}</div>
       ${action}
+    </li>`;
+}
+
+/** 並べ替えモード用の行（▲▼で同じカテゴリ内を移動） */
+function stockSortHtml(s) {
+  const id = esc(s.id);
+  const disabled = s.pending ? 'disabled' : '';
+  const arrow = 'flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 active:scale-95 active:bg-slate-200';
+  return `
+    <li class="flex items-center gap-2 rounded-2xl bg-white p-2 pl-4 shadow-sm ${s.pending ? 'animate-pulse' : ''}">
+      <p class="min-w-0 flex-1 break-words font-bold">${esc(s.name)}</p>
+      <button type="button" data-action="move-stock" data-id="${id}" data-dir="-1" ${disabled} aria-label="上へ" class="${arrow}">▲</button>
+      <button type="button" data-action="move-stock" data-id="${id}" data-dir="1" ${disabled} aria-label="下へ" class="${arrow}">▼</button>
     </li>`;
 }
 
@@ -758,6 +946,15 @@ function shortDate(s) {
   if (!m) return s || '';
   const md = `${Number(m[2])}/${Number(m[3])} ${m[4]}`;
   return Number(m[1]) === new Date().getFullYear() ? md : `${m[1]}/${md}`;
+}
+
+/** 重複判定用の正規化（全角/半角・大文字/小文字・空白の違いを無視。Code.gs の normalize_ と同じ） */
+function normalizeName(s) {
+  return String(s == null ? '' : s).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+}
+
+function sameName(a, b) {
+  return normalizeName(a) === normalizeName(b);
 }
 
 function esc(s) {

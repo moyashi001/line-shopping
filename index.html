@@ -97,7 +97,10 @@
             class="filter-btn rounded-full border px-4 py-1.5 text-sm font-bold">すべて</button>
           <button type="button" data-action="stock-filter" data-filter="need"
             class="filter-btn rounded-full border px-4 py-1.5 text-sm font-bold">補充が必要</button>
+          <button type="button" id="btn-sort" data-action="toggle-sort"
+            class="ml-auto rounded-full border px-4 py-1.5 text-sm font-bold">↕ 並べ替え</button>
         </div>
+        <p id="sort-hint" class="-mt-2 mb-3 hidden px-1 text-xs text-slate-400">▲▼で同じカテゴリ内の順番を変更、「✏️ 名前変更」でカテゴリ名を変更できます</p>
         <div id="stock-groups" class="space-y-5"></div>
         <div id="stock-empty" class="hidden rounded-2xl bg-white px-6 py-12 text-center shadow-sm">
           <p class="text-4xl">📦</p>
@@ -130,6 +133,15 @@
         class="w-full resize-none rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
         placeholder="例: 卵 1パック&#10;（改行で複数まとめて追加）"></textarea>
 
+      <input id="item-memo" type="text" maxlength="200"
+        class="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="メモ（任意）例: 2個、特売なら、〇〇のメーカー">
+
+      <div id="suggestions-wrap" class="mt-3 hidden">
+        <p class="mb-1.5 text-xs font-bold text-slate-500">よく買う物（タップですぐ追加）</p>
+        <div id="suggestions" class="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto"></div>
+      </div>
+
       <div id="item-preview-wrap" class="relative mt-3 hidden">
         <img id="item-preview" alt="プレビュー" class="max-h-56 w-full rounded-xl bg-slate-100 object-contain">
         <button type="button" data-action="remove-image" aria-label="写真を外す"
@@ -161,7 +173,7 @@
     <div class="absolute inset-0 bg-black/40" data-action="close-modal"></div>
     <form id="form-stock" class="sheet safe-bottom absolute inset-x-0 bottom-0 mx-auto max-w-lg rounded-t-3xl bg-white px-5 pt-5">
       <div class="mx-auto mb-4 h-1.5 w-10 rounded-full bg-slate-200"></div>
-      <h2 class="mb-3 text-lg font-bold">ストックに追加</h2>
+      <h2 id="stock-modal-title" class="mb-3 text-lg font-bold">ストックに追加</h2>
 
       <label class="block text-xs font-bold text-slate-500">アイテム名</label>
       <input id="stock-name" type="text" maxlength="100" required
@@ -185,7 +197,55 @@
       <div class="mt-5 grid grid-cols-2 gap-2">
         <button type="button" data-action="close-modal"
           class="rounded-xl bg-slate-100 py-3 font-bold text-slate-600 active:bg-slate-200">キャンセル</button>
-        <button type="submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">追加する</button>
+        <button type="submit" id="stock-submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">追加する</button>
+      </div>
+      <button type="button" id="stock-delete" data-action="delete-stock"
+        class="mt-3 hidden w-full py-2 text-sm font-bold text-rose-500 active:text-rose-700">このストックを削除</button>
+    </form>
+  </div>
+
+  <!-- ===== モーダル: 買物アイテム編集 ===== -->
+  <div id="modal-edit-item" class="modal fixed inset-0 z-40 hidden">
+    <div class="absolute inset-0 bg-black/40" data-action="close-modal"></div>
+    <form id="form-edit-item" class="sheet safe-bottom absolute inset-x-0 bottom-0 mx-auto max-h-[90vh] max-w-lg overflow-y-auto rounded-t-3xl bg-white px-5 pt-5">
+      <div class="mx-auto mb-4 h-1.5 w-10 rounded-full bg-slate-200"></div>
+      <h2 class="mb-3 text-lg font-bold">アイテムを編集</h2>
+
+      <div id="edit-item-image-wrap" class="mb-3 hidden">
+        <img id="edit-item-image" alt="" referrerpolicy="no-referrer" class="max-h-48 w-full rounded-xl bg-slate-100 object-contain">
+      </div>
+
+      <label class="block text-xs font-bold text-slate-500">アイテム名</label>
+      <input id="edit-item-name" type="text" maxlength="100" required
+        class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="例: 卵">
+
+      <label class="mt-3 block text-xs font-bold text-slate-500">メモ（数量・銘柄など）</label>
+      <input id="edit-item-memo" type="text" maxlength="200"
+        class="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30"
+        placeholder="例: 10個入り、〇〇のメーカー">
+
+      <div class="mt-5 grid grid-cols-2 gap-2">
+        <button type="button" data-action="close-modal"
+          class="rounded-xl bg-slate-100 py-3 font-bold text-slate-600 active:bg-slate-200">キャンセル</button>
+        <button type="submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">保存する</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ===== モーダル: カテゴリ名変更 ===== -->
+  <div id="modal-category" class="modal fixed inset-0 z-40 hidden">
+    <div class="absolute inset-0 bg-black/40" data-action="close-modal"></div>
+    <form id="form-category" class="sheet safe-bottom absolute inset-x-0 bottom-0 mx-auto max-w-lg rounded-t-3xl bg-white px-5 pt-5">
+      <div class="mx-auto mb-4 h-1.5 w-10 rounded-full bg-slate-200"></div>
+      <h2 class="mb-3 text-lg font-bold">カテゴリ名を変更</h2>
+      <input id="category-name" type="text" maxlength="30" required
+        class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:border-line focus:outline-none focus:ring-2 focus:ring-line/30">
+      <p class="mt-2 text-xs text-slate-400">既存のカテゴリ名にすると、そのカテゴリにまとめられます</p>
+      <div class="mt-5 grid grid-cols-2 gap-2">
+        <button type="button" data-action="close-modal"
+          class="rounded-xl bg-slate-100 py-3 font-bold text-slate-600 active:bg-slate-200">キャンセル</button>
+        <button type="submit" class="rounded-xl bg-line py-3 font-bold text-white active:bg-line-dark">変更する</button>
       </div>
     </form>
   </div>
