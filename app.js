@@ -58,6 +58,9 @@ async function init() {
     return;
   }
 
+  // LIFF の初期化と並行して GAS を起こしておく（コールドスタートの待ち時間を重ねて短縮）
+  fetch(APP_CONFIG.GAS_URL, { method: 'GET', mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+
   // 前回のデータがあれば即表示し、GASの応答（数秒〜数十秒）を待たずに操作できるようにする
   const cached = loadCache();
   if (cached) {
